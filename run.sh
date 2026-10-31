@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# DGFScarlett — avvio direttamente dalla cartella del progetto, senza installare.
+# DGFScarlett — Designed by Diego Fantoma
+# Avvio direttamente dalla cartella del progetto, senza installare.
 #   ./run.sh                 apre la finestra
 #   ./run.sh list Mix        qualsiasi comando da terminale (list, get, set, save, load, midi-ports)
 #   ./run.sh --card USB      sceglie la scheda
@@ -12,13 +13,15 @@ SCRIPT="$DIR/dgfscarlett.py"
 
 has_pyside() { "$1" -c "import PySide6" >/dev/null 2>&1; }
 
-# i comandi da terminale non hanno bisogno di PySide6
-case "${1:-}" in
-    list|get|set|save|load|midi-ports|-h|--help|--version)
-        exec python3 "$SCRIPT" "$@" ;;
-esac
+# i comandi da terminale non hanno bisogno di PySide6 (anche dopo «--card ID»)
+for a in "$@"; do
+    case "$a" in
+        list|get|set|save|load|midi-ports|-h|--help|--version)
+            exec python3 "$SCRIPT" "$@" ;;
+    esac
+done
 
-if ! command -v amixer >/dev/null; then
+if [[ -z "${DGFSCARLETT_AMIXER:-}" ]] && ! command -v amixer >/dev/null; then
     echo "Manca «amixer»: installa alsa-utils  (sudo apt install alsa-utils)" >&2
     exit 1
 fi

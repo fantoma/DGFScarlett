@@ -1,5 +1,7 @@
 # DGFScarlett
 
+*Designed by Diego Fantoma*
+
 Pannello di controllo per le schede audio **Focusrite Scarlett / Clarett** su Linux, con patch bay a matrice, mixer a fader e controllo da superficie **USB MIDI** con *MIDI learn*.
 
 Usa i controlli ALSA esposti dal driver `scarlett2` del kernel (gli stessi che Focusrite Control usa su Windows/macOS) tramite `amixer`. Pensato per la **Scarlett 18i20 2ª gen.**, funziona con ogni modello supportato dal driver: le sezioni si costruiscono dai controlli che la scheda espone.
@@ -78,4 +80,4 @@ python3 -m unittest discover -s tests
 
 ## Licenza
 
-MIT — vedi [LICENSE](LICENSE). Focusrite, Scarlett e Clarett sono marchi di Focusrite Audio Engineering Ltd.; questo progetto non è affiliato a Focusrite.
+MIT — vedi [LICENSE](LICENSE). Designed by Diego Fantoma. Focusrite, Scarlett e Clarett sono marchi di Focusrite Audio Engineering Ltd.; questo progetto non è affiliato a Focusrite.

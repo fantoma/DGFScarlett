@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# DGFScarlett — installazione per l'utente corrente (nessun permesso di root richiesto, tranne i pacchetti apt).
+# DGFScarlett — Designed by Diego Fantoma
+# Installazione per l'utente corrente (nessun permesso di root richiesto, tranne i pacchetti apt).
 #   ./install.sh             installa o aggiorna
 #   ./install.sh --uninstall rimuove programma, ambiente e collegamenti (la configurazione resta)
 set -euo pipefail
@@ -48,7 +49,7 @@ cat > "$DESKTOP" <<EOF
 Type=Application
 Name=DGFScarlett
 GenericName=Mixer Focusrite Scarlett
-Comment=Patch bay, mixer e MIDI learn per Focusrite Scarlett / Clarett
+Comment=Patch bay, mixer e MIDI learn per Focusrite Scarlett / Clarett — Designed by Diego Fantoma
 Exec=$BIN
 Icon=audio-card
 Terminal=false

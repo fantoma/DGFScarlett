@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """DGFScarlett — pannello di controllo per le schede Focusrite Scarlett / Clarett su Linux.
+Designed by Diego Fantoma.
 
 Usa i controlli ALSA esposti dal driver «scarlett2» del kernel (gli stessi di Focusrite Control su
 Windows/macOS) tramite «amixer» (pacchetto alsa-utils). Pensato per la Scarlett 18i20 2ª gen., funziona con
@@ -29,6 +30,7 @@ import threading
 import time
 
 APP = "DGFScarlett"
+AUTHOR = "Designed by Diego Fantoma"
 VERSION = "2.0"
 CONFIG = os.path.expanduser("~/.config/dgfscarlett/config.json")
 
@@ -565,6 +567,7 @@ def gui(args):
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP)
+    app.setOrganizationName("Diego Fantoma")
     app.setStyle("Fusion")
     pal = QPalette()
     for role, rgb in {QPalette.Window: (34, 35, 41), QPalette.WindowText: (225, 225, 230),
@@ -1355,7 +1358,12 @@ def gui(args):
             root.addWidget(self.tabs, 1)
             self.status = QLabel("")
             self.status.setStyleSheet("color:#9a9aa5;")
-            root.addWidget(self.status)
+            bottom = QHBoxLayout()
+            bottom.addWidget(self.status, 1)
+            sig = QLabel(f"{APP} {VERSION} · {AUTHOR}")
+            sig.setStyleSheet("color:#6e6e78;font-size:11px;")
+            bottom.addWidget(sig)
+            root.addLayout(bottom)
             self._build()
             self._build_midi_tab()
             self.tabs.setCurrentIndex(min(int(self.cfg.get("ui", {}).get("tab", 0)), self.tabs.count() - 1))
@@ -2208,12 +2216,12 @@ def ensure_pyside6():
 
 
 def main():
-    ap = argparse.ArgumentParser(description=f"{APP}: pannello di controllo per Focusrite Scarlett/Clarett (Linux)")
+    ap = argparse.ArgumentParser(description=f"{APP}: pannello di controllo per Focusrite Scarlett/Clarett (Linux) · {AUTHOR}")
     ap.add_argument("--card", help="id ALSA della scheda (es. USB); predefinita: la prima Focusrite")
     ap.add_argument("cmd", nargs="?", choices=["list", "get", "set", "save", "load", "midi-ports"],
                     help="comando (senza: finestra)")
     ap.add_argument("args", nargs="*")
-    ap.add_argument("--version", action="version", version=f"{APP} {VERSION}")
+    ap.add_argument("--version", action="version", version=f"{APP} {VERSION} — {AUTHOR}")
     args, extra = ap.parse_known_args()
     bad = [x for x in extra if not re.fullmatch(r"-(\d+(\.\d+)?|inf)\s*(db)?", x.lower())]
     if bad:
