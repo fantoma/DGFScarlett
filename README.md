@@ -49,7 +49,7 @@ cd DGFScarlett
 
 Crea un ambiente Python con PySide6 in `~/.local/share/dgfscarlett`, il comando `dgfscarlett` e una voce nel menu delle applicazioni. Disinstallazione: `./install.sh --uninstall`.
 
-Senza installare: `python3 dgfscarlett.py` (serve PySide6: `sudo apt install python3-pyside6.qtwidgets` su Ubuntu 24.04+, oppure `pip install PySide6`).
+Senza installare: `./run.sh` dalla cartella del progetto. Usa PySide6 se c'è già (sistema o ambiente di `install.sh`), altrimenti crea da solo un ambiente `.venv` nella cartella al primo avvio. Accetta le stesse opzioni e gli stessi comandi del programma (`./run.sh list Mix`, `./run.sh --card USB`).
 
 Requisiti: Linux con kernel 6.7+ (driver `scarlett2` attivo di default; sui kernel precedenti per la 2ª gen. serve `options snd_usb_audio vid=0x1235 pid=0x8201 device_setup=1`), `alsa-utils`, Python 3.8+.
 
