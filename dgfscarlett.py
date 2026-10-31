@@ -21,7 +21,9 @@ Opzione: --card ID   (id ALSA della scheda, es. USB; senza: la prima Focusrite t
 """
 import argparse
 import json
+import math
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -263,6 +265,24 @@ def is_route(ctl):
     if ctl.type != "enum" or "Volume Control" in ctl.name or "Clock" in ctl.name or len(ctl.items) < 4:
         return False
     return sum(1 for it in ctl.items if SRC_RE.match(it)) >= 0.8 * len(ctl.items)
+
+
+# ordine dei valori di «Level Meter» (kernel 6.7+): le destinazioni del routing, per tipo e numero
+METER_ORDER = (r"^Analogue Output", r"^S/PDIF Output", r"^ADAT Output", r"^Mixer Input", r"^PCM \d+ Capture")
+
+
+def meter_dests(route_names, count):
+    """Nomi delle destinazioni nell'ordine dei valori di «Level Meter», o None se i conti non tornano."""
+    def num(n):
+        m = re.search(r"(\d+)", n)
+        return int(m.group(1)) if m else 0
+    g = [sorted((n for n in route_names if re.match(p, n)), key=num) for p in METER_ORDER]
+    dsp = sorted((n for n in route_names if re.match(r"^DSP Input", n)), key=num)
+    base = [n for grp in g for n in grp]
+    for cand in ([base] + ([g[0] + g[1] + g[2] + g[3] + dsp + g[4], base + dsp, dsp + base] if dsp else [])):
+        if len(cand) == count:
+            return cand
+    return None
 
 
 def pretty(target):
@@ -589,7 +609,7 @@ def protect_none():
 
 def gui(args):
     protect_none()
-    from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
+    from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
     from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPalette, QPen, QPolygon, QShortcut
     from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QCheckBox, QComboBox,
                                    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
@@ -626,10 +646,44 @@ def gui(args):
     GH, GCW = 22, 26                      # altezza delle righe di gruppo, larghezza di un gruppo chiuso
     GREY = QColor(150, 150, 160)
 
-    class Bridge(QObject):
-        loaded = Signal(object)          # dict nome → Control (dal thread di lettura)
-        failed = Signal(str)
-        midi = Signal(str, str, int, int, float)
+    inbox = queue.SimpleQueue()
+
+    class Chan:
+        """Canale thread → interfaccia. I thread non chiamano mai Qt: mettono il messaggio in coda e la finestra
+        lo raccoglie ogni 20 ms dal thread principale (niente segnali Qt emessi da altri thread)."""
+
+        def __init__(self, coalesce=False):
+            self.handlers, self.coalesce = [], coalesce
+
+        def connect(self, fn):
+            self.handlers.append(fn)
+
+        def emit(self, *a):
+            inbox.put((self, a))
+
+    class Bridge:
+        def __init__(self):
+            self.loaded = Chan()          # dict nome → Control (dal thread di lettura)
+            self.failed = Chan()
+            self.midi = Chan()
+            self.meters = Chan(coalesce=True)   # valori di «Level Meter»: conta solo l'ultimo
+
+    def drain_inbox():
+        msgs = []
+        try:
+            while len(msgs) < 500:
+                msgs.append(inbox.get_nowait())
+        except queue.Empty:
+            pass
+        last = {}
+        for i, (ch, a) in enumerate(msgs):
+            if ch.coalesce:
+                last[ch] = i
+        for i, (ch, a) in enumerate(msgs):
+            if ch.coalesce and last[ch] != i:
+                continue
+            for fn in ch.handlers:
+                fn(*a)
 
     class Worker:
         """Scritture in coda su un thread: l'interfaccia non si blocca, conta solo l'ultimo valore."""
@@ -686,6 +740,100 @@ def gui(args):
         return 1
 
     # ------------------------------------------------------------------ fader
+    class LevelMeter(QWidget):
+        """Vumeter: verde fino a -18 dBFS, giallo fino a -6, rosso oltre; picco trattenuto 1,5 s;
+        spia di saturazione (clic per spegnerla). Grigio = segnale non misurabile (non instradato)."""
+        LO = -60.0
+
+        def __init__(self, vertical=False, text=False):
+            super().__init__()
+            self.vertical, self.text = vertical, text
+            self.shown = self.peak = self.LO
+            self.peak_t, self.clip, self.active, self.known = 0.0, False, False, False
+            self.mapper, self.inset_fn = None, None      # per allinearsi alla scala di un fader
+            if vertical:
+                self.setFixedWidth(7)
+            else:
+                self.setFixedHeight(18)
+                self.setMinimumWidth(240)
+            self.setToolTip("Livello (dBFS) · rosso fisso a destra = saturazione, clic per azzerare")
+
+        def set_level(self, db):
+            now = time.monotonic()
+            first = not self.known
+            self.known = True
+            if db is None:
+                if self.active or first:
+                    self.active, self.shown, self.peak = False, self.LO, self.LO
+                    self.update()
+                return
+            self.active = True
+            self.shown = max(db, self.shown - 1.3)                  # discesa ~25 dB/s
+            if db >= self.peak or now - self.peak_t > 1.5:
+                self.peak, self.peak_t = max(db, self.shown), now
+            if db >= -0.5:
+                self.clip = True
+            self.update()
+
+        def mousePressEvent(self, e):
+            self.clip = False
+            self.update()
+
+        def _f(self, db):
+            if self.mapper is not None:
+                return 0.0 if db <= self.LO else max(0.0, min(1.0, self.mapper(db)))
+            return max(0.0, min(1.0, (db - self.LO) / -self.LO))
+
+        def paintEvent(self, e):
+            p = QPainter(self)
+            W, H = self.width(), self.height()
+            TW = 46 if self.text and not self.vertical else 0          # spazio per il numero a destra
+            W -= TW
+            p.fillRect(0, 0, W, H, QColor(21, 22, 26))
+            f = p.font()
+            f.setPixelSize(10)
+            p.setFont(f)
+            if not self.active:
+                p.setPen(QColor(90, 90, 100))
+                if TW and self.known:
+                    p.drawText(QRect(4, 0, W - 8, H), Qt.AlignLeft | Qt.AlignVCenter, "non instradato")
+                return
+            ins = int(self.inset_fn()) if self.vertical and self.inset_fn else 1
+            L = (H - 2 * ins) if self.vertical else W - 2
+            fl = self._f(self.shown)
+            for a, b, col in ((0.0, self._f(-18), QColor(46, 160, 80)), (self._f(-18), self._f(-6), QColor(214, 180, 40)),
+                              (self._f(-6), 1.0, QColor(220, 50, 50))):
+                a, b = min(a, fl), min(b, fl)
+                if b <= a:
+                    continue
+                if self.vertical:
+                    p.fillRect(1, int(H - ins - b * L), W - 2, max(1, int((b - a) * L)), col)
+                else:
+                    p.fillRect(int(1 + a * L), 2, max(1, int((b - a) * L)), H - 4, col)
+            if not self.vertical:                                      # tacche a -18 e -6
+                p.setPen(QColor(60, 60, 68))
+                for d in (-18, -6):
+                    x = int(1 + self._f(d) * L)
+                    p.drawLine(x, H - 3, x, H - 1)
+            pk = self._f(self.peak)
+            if pk > 0:
+                p.setPen(QColor(235, 235, 240))
+                if self.vertical:
+                    y = int(H - ins - pk * L)
+                    p.drawLine(1, y, W - 2, y)
+                else:
+                    x = int(1 + pk * L)
+                    p.drawLine(x, 2, x, H - 3)
+            if self.clip:
+                if self.vertical:
+                    p.fillRect(0, max(0, int(H - ins - self._f(0.0) * L) - 4), W, 4, QColor(255, 40, 40))
+                else:
+                    p.fillRect(W - 6, 0, 6, H, QColor(255, 40, 40))
+            if TW:
+                p.setPen(QColor(255, 90, 90) if self.clip else QColor(220, 220, 228))
+                txt = "-∞" if self.peak <= self.LO else f"{self.peak:.0f} dB"
+                p.drawText(QRect(W, 0, TW, H), Qt.AlignRight | Qt.AlignVCenter, txt)
+
     class Scale(QWidget):
         """Scala in dB accanto al fader."""
         MARKS = (6, 0, -6, -12, -20, -30, -40, -60)
@@ -756,7 +904,14 @@ def gui(args):
             row.addStretch(1)
             row.addWidget(self.scale)
             row.addWidget(self.sl)
-            row.addSpacing(24)
+            self.meter = LevelMeter(vertical=True)
+            self.meter.hide()
+            # stessa scala del fader: -6 dBFS accanto alla tacca «-6»
+            self.meter.mapper = lambda db: fader_pos(self.ctl, self.ctl.from_db(db)) if self.ctl.db else (db + 60) / 60
+            self.meter.inset_fn = lambda: self.sl.style().pixelMetric(QStyle.PM_SliderLength, None, self.sl) / 2
+            row.addSpacing(6)
+            row.addWidget(self.meter)
+            row.addSpacing(11)
             row.addStretch(1)
             v.addLayout(row, 1)
             self.midi = QLabel("")
@@ -1367,11 +1522,13 @@ def gui(args):
             self.bridge.loaded.connect(self._loaded)
             self.bridge.failed.connect(self._error)
             self.bridge.midi.connect(self.on_midi)
+            self.bridge.meters.connect(self._meters)
             self.worker = Worker(card, self.bridge)
             self.binders, self.any_binders, self.learn_w = {}, [], {}
             self.matrices, self.recent, self.softmute = [], {}, {}
             self.route_names, self.out_labels = [], {}
             self.last_err = 0
+            self.meters, self.meter_on = [], False
             self.learn_mode, self.learn_target = False, None
             mcfg = self.cfg.get("midi", {})
             self.midimap = {}
@@ -1400,6 +1557,9 @@ def gui(args):
             self._build_midi_tab()
             self.tabs.setCurrentIndex(min(int(self.cfg.get("ui", {}).get("tab", 0)), self.tabs.count() - 1))
             self.tabs.currentChanged.connect(lambda i: self._ui_cfg("tab", i))
+            self.inbox_timer = QTimer(self)
+            self.inbox_timer.timeout.connect(drain_inbox)
+            self.inbox_timer.start(20)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.worker.read_async)
             self.timer.start(1500)             # la manopola e i tasti della scheda si vedono qui
@@ -1407,6 +1567,12 @@ def gui(args):
             self.midi_timer.timeout.connect(self.midi_hotplug)
             self.midi_timer.start(4000)
             self.midi_open()
+            if self.meter_ctl is not None:
+                threading.Thread(target=self._meter_loop, daemon=True).start()
+                self.meter_timer = QTimer(self)
+                self.meter_timer.timeout.connect(self._meter_gate)
+                self.meter_timer.start(300)
+                self._meter_gate()
             QShortcut(QKeySequence("Esc"), self, activated=lambda: self.set_learn(False))
             QShortcut(QKeySequence("Ctrl+L"), self, activated=lambda: self.learn_btn.click())
             self.resize(1400, 880)
@@ -1590,6 +1756,55 @@ def gui(args):
                 m.addAction(f"Rimuovi assegnazione MIDI ({lab})", lambda: self.unmap_target(target))
             m.exec(gpos)
 
+        # ------------------------------------------------------------ vumeter
+        def add_meter(self, m, index_fn):
+            if self.meter_ctl is None:
+                return
+            m.show()
+            self.meters.append((m, index_fn))
+
+        def src_meter_index(self, src):
+            """Indice di «Level Meter» per una sorgente (es. «Analogue 3»): la destinazione a cui è collegata,
+            preferendo il PCM verso il computer, poi l'ingresso del mixer."""
+            best = None
+            for n, i in self.meter_idx.items():
+                c = card.ctls.get(n)
+                if c is not None and c.text() == src:
+                    pr = 0 if n.startswith("PCM") else 1 if n.startswith("Mixer Input") else 2
+                    if best is None or pr < best[0]:
+                        best = (pr, i)
+            return best[1] if best else None
+
+        def _meter_gate(self):
+            self.meter_on = (self.isVisible() and not self.isMinimized()
+                             and self.tabs.tabText(self.tabs.currentIndex()) in ("Ingressi", "Mixer", "Uscite"))
+
+        def _meter_loop(self):
+            args = ["-c", card.id, "cget", f"numid={self.meter_ctl.numid}"]
+            while True:
+                if not self.meter_on:
+                    time.sleep(0.2)
+                    continue
+                try:
+                    cs = parse_contents(_amixer(args, timeout=1.5))
+                    if cs:
+                        self.bridge.meters.emit(cs[0].values)
+                except AlsaError:
+                    time.sleep(1.0)
+                time.sleep(0.05)
+
+        def _meters(self, vals):
+            full = max(1, self.meter_ctl.max)
+            for m, fn in self.meters:
+                if not m.isVisible():
+                    continue
+                i = fn()
+                if i is None or i >= len(vals):
+                    m.set_level(None)
+                else:
+                    v = vals[i]
+                    m.set_level(20 * math.log10(v / full) if v > 0 else -200.0)
+
         def mix_dests(self, x):
             return [dest_label(n) for n in self.route_names if n in card.ctls and card.ctls[n].text() == f"Mix {x}"]
 
@@ -1654,29 +1869,105 @@ def gui(args):
                         self.out_labels[f"Out {int(m.group(1))}"] = m.group(2).replace("Headphones", "Cuffie")
             self.route_names = [n for n in sorted(ctls) if is_route(ctls[n])]
 
-            # --- ingressi (modelli con controlli software degli ingressi)
+            # --- ingressi: una riga per ingresso, con vumeter e controlli
+            self.meter_ctl = ctls.get("Level Meter")
+            self.meter_idx, self.meter_note = {}, ""
+            if self.meter_ctl is not None:
+                order = meter_dests(self.route_names, self.meter_ctl.count)
+                if order:
+                    self.meter_idx = {n: i for i, n in enumerate(order)}
+                    rel = re.match(r"(\d+)\.(\d+)", os.uname().release)
+                    if rel and (int(rel.group(1)), int(rel.group(2))) < (6, 7):
+                        self.meter_note = ("Kernel precedente al 6.7: il driver può restituire i livelli in un ordine "
+                                           "diverso, i vumeter potrebbero non corrispondere agli ingressi.")
+                else:
+                    self.meter_ctl = None
+                    self.meter_note = "«Level Meter» ha un numero di valori inatteso: vumeter disattivati."
+            used.add("Level Meter")
             ins = [n for n in ctls if (re.match(r"^Line In \d", n) or "Phantom" in n or re.match(r"^Input \d", n))
                    and n not in self.route_names]
-            if ins:
+            srcs = {}
+            for n in self.route_names:
+                for it in ctls[n].items:
+                    m = re.match(r"^(Analogue|S/PDIF|ADAT) (\d+)$", it)
+                    if m:
+                        srcs.setdefault(m.group(1), set()).add(int(m.group(2)))
+            if ins or self.meter_ctl is not None:
                 w = QWidget()
-                g = QGridLayout(w)
-                for r, n in enumerate(sorted(ins)):
-                    g.addWidget(QLabel(short_name(n)), r, 0)
-                    c = ctls[n]
-                    if c.type == "bool":
-                        conf = "Accendere l'alimentazione phantom 48V?" if "phantom" in n.lower() else None
-                        g.addWidget(self.toggle(n, "on", green=True, confirm=conf), r, 1, Qt.AlignLeft)
-                    elif c.type == "enum":
-                        g.addWidget(self.combo(n, 160), r, 1, Qt.AlignLeft)
-                    else:
-                        sl = QSlider(Qt.Horizontal)
-                        sl.setRange(c.min, c.max)
-                        sl.setValue(c.value or c.min)
-                        sl.valueChanged.connect(lambda x, n=n: self.apply(n, x))
-                        g.addWidget(sl, r, 1)
-                    used.add(n)
-                g.setRowStretch(len(ins), 1)
+                v = QVBoxLayout(w)
+                g = QGridLayout()
+                g.setHorizontalSpacing(12)
+                r = 0
+                for title, pre in (("Ingressi analogici", "Analogue"), ("S/PDIF", "S/PDIF"), ("ADAT", "ADAT")):
+                    nums = sorted(srcs.get(pre, ()))
+                    if not nums or (pre != "Analogue" and self.meter_ctl is None):
+                        continue
+                    lab = QLabel(f"<b>{title}</b>")
+                    lab.setContentsMargins(0, 8 if r else 0, 0, 2)
+                    g.addWidget(lab, r, 0, 1, 3)
+                    r += 1
+                    for k in nums:
+                        src = f"{pre} {k}"
+                        g.addWidget(QLabel(f"In {k}" if pre == "Analogue" else src), r, 0)
+                        if self.meter_ctl is not None:
+                            m = LevelMeter(text=True)
+                            self.add_meter(m, lambda src=src: self.src_meter_index(src))
+                            g.addWidget(m, r, 1)
+                        h = QHBoxLayout()
+                        h.setSpacing(6)
+                        if pre == "Analogue":
+                            mine = sorted(n for n in ins if re.match(rf"^(Line In|Input) {k}\b(?!-)", n))
+                            for n in mine:
+                                c = ctls[n]
+                                lab = re.sub(rf"^(Line In|Input) {k}\s*", "", short_name(n)) or short_name(n)
+                                if c.type == "bool":
+                                    conf = "Accendere l'alimentazione phantom 48V?" if "phantom" in n.lower() else None
+                                    h.addWidget(self.toggle(n, lab, green=True, confirm=conf))
+                                elif c.type == "enum":
+                                    h.addWidget(QLabel(lab))
+                                    h.addWidget(self.combo(n, 90))
+                                else:
+                                    h.addWidget(QLabel(lab))
+                                    sl = QSlider(Qt.Horizontal)
+                                    sl.setRange(c.min, c.max)
+                                    sl.setValue(c.value or c.min)
+                                    sl.setMinimumWidth(120)
+                                    sl.valueChanged.connect(lambda x, n=n: self.apply(n, x))
+                                    h.addWidget(sl)
+                                used.add(n)
+                        h.addStretch(1)
+                        g.addLayout(h, r, 2)
+                        r += 1
+                others = [n for n in sorted(ins) if n not in used]
+                if others:
+                    g.addWidget(QLabel("<b>Altri controlli d'ingresso</b>"), r, 0, 1, 3)
+                    r += 1
+                    for n in others:
+                        c = ctls[n]
+                        g.addWidget(QLabel(short_name(n)), r, 0, 1, 2)
+                        if c.type == "bool":
+                            conf = "Accendere l'alimentazione phantom 48V?" if "phantom" in n.lower() else None
+                            g.addWidget(self.toggle(n, "on", green=True, confirm=conf), r, 2, Qt.AlignLeft)
+                        elif c.type == "enum":
+                            g.addWidget(self.combo(n, 160), r, 2, Qt.AlignLeft)
+                        else:
+                            sl = QSlider(Qt.Horizontal)
+                            sl.setRange(c.min, c.max)
+                            sl.setValue(c.value or c.min)
+                            sl.valueChanged.connect(lambda x, n=n: self.apply(n, x))
+                            g.addWidget(sl, r, 2)
+                        used.add(n)
+                        r += 1
                 g.setColumnStretch(2, 1)
+                v.addLayout(g)
+                v.addStretch(1)
+                if self.meter_ctl is not None:
+                    v.addWidget(self.hint("La scheda misura i segnali dove sono instradati: il vumeter di un ingresso "
+                                          "legge il PCM (o l'ingresso del mixer) a cui è collegato. Un ingresso non "
+                                          "collegato a nulla risulta «non instradato». " + self.meter_note))
+                else:
+                    v.addWidget(self.hint(self.meter_note or "Vumeter non disponibili: il driver non espone «Level "
+                                          "Meter» (serve un kernel recente con il driver scarlett2)."))
                 self.tabs.addTab(self.scroll(w), "Ingressi")
 
             # --- mixer (fader) e matrice dei mix
@@ -1759,6 +2050,8 @@ def gui(args):
                 for n in sorted(outs):
                     name, label = outs[n]
                     f = self.fader(name, f"Out {n}", label.replace("Headphones", "Cuffie"))
+                    self.add_meter(f.meter, lambda d=f"Analogue Output {n:02d} Playback Enum": self.meter_idx.get(d))
+                    f.meter.setToolTip("Livello del segnale mandato a questa uscita")
                     used.add(name)
                     mute = f"Line {n:02d} Mute Playback Switch"
                     if self.C(mute):
@@ -1844,6 +2137,8 @@ def gui(args):
                     continue
                 src_name = f"Mixer Input {i:02d} Capture Enum"
                 f = self.fader(n, f"In {i}", "")
+                self.add_meter(f.meter, lambda d=src_name: self.meter_idx.get(d))
+                f.meter.setToolTip("Livello all'ingresso del mixer (prima del fader)")
                 row = QHBoxLayout()
                 row.addWidget(self.mute_button(n))
                 f.extra.addLayout(row)

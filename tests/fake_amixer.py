@@ -3,8 +3,10 @@
 la scheda:  DGFSCARLETT_AMIXER=tests/fake_amixer.py ./dgfscarlett.py --card USB
 Lo stato sta in $FAKE_AMIXER_STATE (predefinito /tmp/fake-scarlett.json)."""
 import json
+import math
 import os
 import sys
+import time
 
 STATE = os.environ.get("FAKE_AMIXER_STATE", "/tmp/fake-scarlett.json")
 SOURCES = (["Off"] + [f"Analogue {i}" for i in range(1, 9)] + ["S/PDIF 1", "S/PDIF 2"]
@@ -51,7 +53,29 @@ def controls():
             add(f"Mix {chr(65 + x)} Input {i:02d} Playback Volume", "int", min=0, max=172,
                 value=160 if i == x + 1 else 0, db=(-80, 0.5))
     add("Firmware Version", "int", min=0, max=99999, value=1083, ro=True)
+    add("Level Meter", "int", min=0, max=4095, value=0, ro=True, count=58)
     return c
+
+
+DEST_ORDER = ([f"Analogue Output {i:02d} Playback Enum" for i in range(1, 11)]
+              + [f"S/PDIF Output {i} Playback Enum" for i in range(1, 3)]
+              + [f"ADAT Output {i} Playback Enum" for i in range(1, 9)]
+              + [f"Mixer Input {i:02d} Capture Enum" for i in range(1, 19)]
+              + [f"PCM {i:02d} Capture Enum" for i in range(1, 21)])
+
+
+def level(src, t):
+    """Segnale finto: gli ingressi analogici «respirano», l'1 arriva a saturare."""
+    if src == "Off":
+        return 0
+    k = int(src.split()[-1]) if src.split()[-1].isdigit() else ord(src[-1]) - 64
+    if src.startswith("Analogue"):
+        db = -36 + 34 * abs(math.sin(t * (0.6 + 0.13 * k) + k)) + (2 if k == 1 else 0)
+    elif src.startswith("PCM"):
+        db = -24 + 10 * math.sin(t * 0.9 + k)
+    else:
+        db = -18 + 6 * math.sin(t + k)
+    return int(4095 * 10 ** (min(0, db) / 20))
 
 
 def load():
@@ -69,6 +93,9 @@ def load():
     for c in cs:
         if c["name"].startswith("Line ") and "Playback Volume" in c["name"]:
             c["ro"] = modes.get(c["name"][5:7]) == 1
+    by = {c["name"]: c for c in cs}
+    t = time.time()
+    by["Level Meter"]["values"] = [level(by[d]["items"][by[d]["value"]], t) for d in DEST_ORDER]
     return cs
 
 
@@ -78,8 +105,9 @@ def dump(cs):
         out.append(f"numid={c['numid']},iface=MIXER,name='{c['name']}'")
         acc = "r-------" if c.get("ro") else "rw------"
         if c["kind"] == "int":
-            out.append(f"  ; type=INTEGER,access={acc},values=1,min={c['min']},max={c['max']},step=0")
-            out.append(f"  : values={c['value']}")
+            vals = c.get("values", [c["value"]])
+            out.append(f"  ; type=INTEGER,access={acc},values={len(vals)},min={c['min']},max={c['max']},step=0")
+            out.append(f"  : values={','.join(map(str, vals))}")
             if "db" in c:
                 out.append(f"  | dBscale-min={c['db'][0]:.2f}dB,step={c['db'][1]:.2f}dB,mute=0")
         elif c["kind"] == "bool":
@@ -98,6 +126,10 @@ def main(argv):
     cs = load()
     if args[:1] == ["contents"]:
         dump(cs)
+        return 0
+    if args[:1] == ["cget"]:
+        numid = int(args[1].split("=")[1])
+        dump([c for c in cs if c["numid"] == numid])
         return 0
     if args[:1] == ["cset"]:
         numid = int(args[1].split("=")[1])

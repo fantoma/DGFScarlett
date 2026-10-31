@@ -12,13 +12,15 @@ Usa i controlli ALSA esposti dal driver `scarlett2` del kernel (gli stessi che F
 
 | Scheda | Cosa fa |
 |---|---|
-| **Ingressi** | Line/Inst, pad, phantom 48 V (con conferma) e gli altri controlli d'ingresso del modello |
-| **Mixer** | Un sotto-tab per ogni mix (A…R), un fader per ogni ingresso del mixer con scala in dB, mute, sorgente e indicazione delle uscite su cui è instradato il mix |
+| **Ingressi** | Una riga per ingresso (analogici, S/PDIF, ADAT) con **vumeter** (picco trattenuto, spia di saturazione) e i controlli del modello: Line/Inst, pad, phantom 48 V (con conferma)… |
+| **Mixer** | Un sotto-tab per ogni mix (A…R), un fader per ogni ingresso del mixer con scala in dB, vumeter, mute, sorgente e indicazione delle uscite su cui è instradato il mix |
 | **Matrice mix** | Ingressi × mix in un colpo d'occhio. Trascina o usa la rotella sulle celle, doppio clic 0 dB ↔ -∞. **Righe espandibili**: clic sul nome per vedere i livelli come barre |
 | **Patch bay** | Matrice destinazioni × sorgenti (uscite analogiche, S/PDIF, ADAT, PCM verso il computer, ingressi del mixer). Clic per collegare, di nuovo per scollegare. **Gruppi di righe e di colonne richiudibili** |
-| **Uscite** | Fader di volume, mute, modo HW/SW (manopola o software) e sorgente per ogni uscita |
+| **Uscite** | Fader di volume con vumeter, mute, modo HW/SW (manopola o software) e sorgente per ogni uscita |
 | **MIDI** | Scelta delle porte, elenco delle assegnazioni, pickup (soft takeover), monitor dell'ultimo messaggio |
 | **Altro** | Tutti i controlli restanti della scheda |
+
+I vumeter leggono il controllo «Level Meter» del driver (kernel 6.7 o successivo) circa 20 volte al secondo, solo mentre sono visibili. La scheda misura i segnali dove sono instradati: il livello di un ingresso si legge dal PCM o dall'ingresso del mixer a cui è collegato; un ingresso non collegato a nulla appare «non instradato».
 
 I fader hanno una curva da mixer (0 dB a circa 3/4 della corsa). Lo stato della scheda viene riletto ogni 1,5 s, quindi la manopola Monitor e i tasti della scheda si vedono anche nel pannello. Lo stato apertura/chiusura dei gruppi e delle righe nelle matrici viene ricordato.
 
@@ -37,9 +39,9 @@ In alternativa: tasto destro su un fader → *MIDI learn…*.
 
 L'ingresso MIDI usa il sequencer ALSA tramite `aseqdump` (alsa-utils), in un processo separato: il controller resta usabile anche da altri programmi e un problema MIDI non può far cadere la finestra. `python-rtmidi` si usa solo se `aseqdump` manca, o forzandolo con `DGFSCARLETT_MIDI=rtmidi`; `DGFSCARLETT_MIDI=off` disattiva il MIDI. Le assegnazioni stanno in `~/.config/dgfscarlett/config.json`.
 
-| Mixer con MIDI learn | Matrice mix con righe espandibili |
-|---|---|
-| ![Mixer](docs/mixer-learn.png) | ![Matrice](docs/matrice-mix.png) |
+| Ingressi con vumeter | Mixer con MIDI learn | Matrice mix con righe espandibili |
+|---|---|---|
+| ![Ingressi](docs/ingressi.png) | ![Mixer](docs/mixer-learn.png) | ![Matrice](docs/matrice-mix.png) |
 
 ## Installazione
 
