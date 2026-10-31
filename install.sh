@@ -34,9 +34,6 @@ if [[ ! -x "$DEST/.venv/bin/python" ]]; then
 fi
 "$DEST/.venv/bin/pip" install -q --upgrade pip
 "$DEST/.venv/bin/pip" install -q PySide6
-# facoltativo: ingresso MIDI diretto (senza, si usa «aseqdump» di alsa-utils)
-"$DEST/.venv/bin/pip" install -q python-rtmidi 2>/dev/null \
-    || echo "  (python-rtmidi non installato: per il MIDI si userà aseqdump — va bene uguale)"
 
 cat > "$BIN" <<EOF
 #!/bin/sh

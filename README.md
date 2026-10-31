@@ -35,7 +35,7 @@ In alternativa: tasto destro su un fader → *MIDI learn…*.
 - Pulsanti e mute: Note o CC (ogni pressione commuta).
 - **Pickup**: con controller non motorizzati il fader segue il controller solo dopo averlo "agganciato", evitando salti di livello.
 
-L'ingresso MIDI usa il sequencer ALSA (`python-rtmidi` se installato, altrimenti `aseqdump` di alsa-utils), quindi il controller resta usabile anche da altri programmi. Le assegnazioni stanno in `~/.config/dgfscarlett/config.json`.
+L'ingresso MIDI usa il sequencer ALSA tramite `aseqdump` (alsa-utils), in un processo separato: il controller resta usabile anche da altri programmi e un problema MIDI non può far cadere la finestra. `python-rtmidi` si usa solo se `aseqdump` manca, o forzandolo con `DGFSCARLETT_MIDI=rtmidi`; `DGFSCARLETT_MIDI=off` disattiva il MIDI. Le assegnazioni stanno in `~/.config/dgfscarlett/config.json`.
 
 | Mixer con MIDI learn | Matrice mix con righe espandibili |
 |---|---|

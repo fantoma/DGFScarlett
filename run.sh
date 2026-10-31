@@ -43,8 +43,6 @@ if [[ -z "$PY" ]]; then
     python3 -m venv "$DIR/.venv"
     "$DIR/.venv/bin/pip" install -q --upgrade pip
     "$DIR/.venv/bin/pip" install -q PySide6
-    "$DIR/.venv/bin/pip" install -q python-rtmidi 2>/dev/null \
-        || echo "  (python-rtmidi non installato: per il MIDI si userà aseqdump)"
     PY="$DIR/.venv/bin/python"
 fi
 

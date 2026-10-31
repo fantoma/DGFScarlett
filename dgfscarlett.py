@@ -323,8 +323,11 @@ def fader_raw(ctl, pos):
 
 # =============================================================================== MIDI in ingresso
 class MidiIn:
-    """Ingresso MIDI: python-rtmidi se c'è, altrimenti «aseqdump» (alsa-utils). Entrambi usano il
-    sequencer ALSA, quindi il controller resta usabile anche da altri programmi.
+    """Ingresso MIDI tramite il sequencer ALSA, così il controller resta usabile anche da altri programmi.
+    Predefinito: «aseqdump» (alsa-utils), un processo separato: nessun modulo C dentro l'interfaccia.
+    python-rtmidi si usa solo se aseqdump manca, o con DGFSCARLETT_MIDI=rtmidi (DGFSCARLETT_MIDI=off: niente MIDI).
+    (Con alcune versioni di python-rtmidi su Python ≤ 3.11 creare/distruggere oggetti MidiIn porta al crash
+    «Fatal Python error: none_dealloc»: per questo qui se ne crea uno solo e gli oggetti aperti non si distruggono.)
     callback(porta, tipo, canale, numero, valore 0…1) con tipo «cc», «note» o «pb» (pitch bend)."""
 
     def __init__(self, callback):
@@ -332,13 +335,24 @@ class MidiIn:
         self.backend = None
         self.opened = []
         self._rt = []
+        self._kept = []                     # oggetti rtmidi chiusi ma tenuti in vita (vedi sopra)
+        self._probe = None
         self._proc = None
-        try:
-            import rtmidi
-            if hasattr(rtmidi, "MidiIn"):
-                self.rtmidi, self.backend = rtmidi, "python-rtmidi"
-        except Exception:
-            pass
+        want = os.environ.get("DGFSCARLETT_MIDI", "auto").lower()
+        if want == "off":
+            return
+        if want in ("auto", "aseqdump") and shutil.which("aseqdump"):
+            self.backend = "aseqdump"
+            return
+        if want in ("auto", "rtmidi"):
+            try:
+                import rtmidi
+                if hasattr(rtmidi, "MidiIn"):
+                    self.rtmidi = rtmidi
+                    self._probe = rtmidi.MidiIn()
+                    self.backend = "python-rtmidi"
+            except Exception:
+                self._probe = None
         if not self.backend and shutil.which("aseqdump"):
             self.backend = "aseqdump"
 
@@ -363,7 +377,7 @@ class MidiIn:
 
     def _rt_names(self):
         try:
-            return [re.sub(r"\s+\d+:\d+$", "", n) for n in self.rtmidi.MidiIn().get_ports()]
+            return [re.sub(r"\s+\d+:\d+$", "", n) for n in self._probe.get_ports()]
         except Exception:
             return []
 
@@ -377,10 +391,10 @@ class MidiIn:
     def close(self):
         for m in self._rt:
             try:
-                m.cancel_callback()
                 m.close_port()
             except Exception:
                 pass
+        self._kept += self._rt
         self._rt = []
         if self._proc:
             try:
