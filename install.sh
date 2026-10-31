@@ -33,7 +33,10 @@ if [[ ! -x "$DEST/.venv/bin/python" ]]; then
     python3 -m venv "$DEST/.venv"
 fi
 "$DEST/.venv/bin/pip" install -q --upgrade pip
-"$DEST/.venv/bin/pip" install -q PySide6
+PYSIDE="PySide6"
+# PySide6 6.12 ha un difetto con Python ≤ 3.11 (crash «deallocating None»): lì si usa la 6.11.3
+"python3" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' || PYSIDE="PySide6==6.11.3"
+"$DEST/.venv/bin/pip" install -q "$PYSIDE"
 
 cat > "$BIN" <<EOF
 #!/bin/sh

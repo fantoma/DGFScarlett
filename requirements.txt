@@ -1,2 +1,3 @@
 PySide6>=6.5
+# con Python 3.10/3.11 evitare la 6.12 (crash «deallocating None»): PySide6==6.11.3
 # il MIDI usa «aseqdump» (pacchetto alsa-utils); python-rtmidi non serve

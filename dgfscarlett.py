@@ -570,7 +570,25 @@ def apply_preset(card, data, order_first=("Volume Control",)):
 
 
 # =============================================================================== interfaccia grafica
+def protect_none():
+    """PySide6 6.12 su Python ≤ 3.11: quasi ogni metodo Qt che non restituisce nulla (QPainter.setPen, fillRect,
+    drawLine…) toglie un riferimento a None senza averlo preso; dopo qualche migliaio di disegni Python muore con
+    «Fatal Python error: none_dealloc: deallocating None». Da Python 3.12 None è «immortale» e il problema non
+    esiste: qui si fa lo stesso, portando il contatore di None a un valore che non potrà mai arrivare a zero."""
+    import platform
+    if sys.version_info >= (3, 12) or platform.python_implementation() != "CPython" \
+            or hasattr(sys, "gettotalrefcount"):            # (le build di debug hanno una struttura diversa)
+        return False
+    import ctypes
+    ref = ctypes.c_ssize_t.from_address(id(None))           # ob_refcnt: primo campo di ogni oggetto CPython
+    if ref.value != sys.getrefcount(None) - 1:               # struttura inattesa: meglio non toccare nulla
+        return False
+    ref.value += 1 << 60
+    return True
+
+
 def gui(args):
+    protect_none()
     from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
     from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPalette, QPen, QPolygon, QShortcut
     from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QApplication, QCheckBox, QComboBox,

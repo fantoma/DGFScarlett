@@ -53,6 +53,8 @@ Crea un ambiente Python con PySide6 in `~/.local/share/dgfscarlett`, il comando 
 
 Senza installare: `./run.sh` dalla cartella del progetto. Usa PySide6 se c'è già (sistema o ambiente di `install.sh`), altrimenti crea da solo un ambiente `.venv` nella cartella al primo avvio. Accetta le stesse opzioni e gli stessi comandi del programma (`./run.sh list Mix`, `./run.sh --card USB`).
 
+Con Python 3.10/3.11 (Ubuntu 22.04) `install.sh` e `run.sh` installano PySide6 6.11.3: la 6.12 ha un difetto che su quelle versioni di Python fa cadere il programma con «deallocating None» (il programma comunque si protegge anche se trova la 6.12).
+
 Requisiti: Linux con kernel 6.7+ (driver `scarlett2` attivo di default; sui kernel precedenti per la 2ª gen. serve `options snd_usb_audio vid=0x1235 pid=0x8201 device_setup=1`), `alsa-utils`, Python 3.8+.
 
 ## Riga di comando
