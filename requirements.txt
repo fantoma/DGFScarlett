@@ -1,0 +1,3 @@
+PySide6>=6.5
+# facoltativo, per il MIDI senza aseqdump
+python-rtmidi

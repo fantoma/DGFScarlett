@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+tests/.state-test.json
+*.png
+!docs/*.png
