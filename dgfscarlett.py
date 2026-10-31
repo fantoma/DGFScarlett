@@ -165,7 +165,9 @@ def parse_contents(text):
     for line in text.splitlines():
         m = re.match(r"numid=(\d+),iface=(\w+)(?:,[^']*?)?,name='(.*)'(?:,index=\d+)?(?:,device=\d+)?\s*$", line)
         if m:
-            cur = Control(int(m.group(1)), m.group(3)) if m.group(2) == "MIXER" else None
+            # controlli del mixer, più i vumeter, che ALSA per convenzione registra sull'interfaccia PCM
+            keep = m.group(2) == "MIXER" or (m.group(2) == "PCM" and "Meter" in m.group(3))
+            cur = Control(int(m.group(1)), m.group(3)) if keep else None
             if cur is not None:
                 ctls.append(cur)
             continue
@@ -303,8 +305,8 @@ def meter_setup(ctls, route_names):
     ctl = ctls.get("Level Meter")
     kern = os.environ.get("DGFSCARLETT_KERNEL") or os.uname().release
     if ctl is None:
-        return None, {}, (f"il driver non espone il controllo «Level Meter» (kernel {kern}): "
-                          "serve il driver scarlett2 con un kernel recente")
+        return None, {}, (f"il driver non espone il controllo «Level Meter» (kernel {kern}). "
+                          "Controlla con:  amixer -c <scheda> contents | grep -i meter")
     old = kernel_version() < (6, 7)
     order = meter_dests(route_names, ctl.count, old_first=old)
     if not order:

@@ -105,8 +105,12 @@ def load():
 
 def dump(cs):
     out = []
+    if len(cs) > 1:
+        out += ["numid=900,iface=PCM,name='Playback Channel Map'", "  ; type=INTEGER,access=r----R--,values=20,min=0,max=36,step=0",
+                "  : values=" + ",".join(["0"] * 20)]
     for c in cs:
-        out.append(f"numid={c['numid']},iface=MIXER,name='{c['name']}'")
+        iface = "PCM" if c["name"] == "Level Meter" else "MIXER"      # come il driver vero
+        out.append(f"numid={c['numid']},iface={iface},name='{c['name']}'")
         acc = "r-------" if c.get("ro") else "rw------"
         if c["kind"] == "int":
             vals = c.get("values", [c["value"]])

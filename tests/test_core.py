@@ -34,6 +34,11 @@ class Core(unittest.TestCase):
         self.assertEqual(c.text(), "+0.0 dB")
         self.assertIn("PCM 3", self.card.ctls["Analogue Output 03 Playback Enum"].items)
 
+    def test_meter_on_pcm_iface(self):
+        self.assertIn("Level Meter", self.card.ctls)                  # iface=PCM, va letto
+        self.assertEqual(self.card.ctls["Level Meter"].count, 56)
+        self.assertNotIn("Playback Channel Map", self.card.ctls)       # altri controlli PCM: no
+
     def test_set_and_persist(self):
         n = "Mix C Input 02 Playback Volume"
         c = self.card.ctls[n]
