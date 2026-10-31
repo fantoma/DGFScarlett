@@ -1,6 +1,14 @@
 __pycache__/
 *.pyc
+/build/
+/dist/
 .venv/
+*.AppImage
+*.AppImage.part*
+*.sha256
+*.zip
+*.patch
 tests/.state-test.json
 *.png
 !docs/*.png
+!packaging/*.png

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DGFScarlett
+GenericName=Mixer Focusrite Scarlett
+Comment=Patch bay, mixer, vumeter e MIDI learn per Focusrite Scarlett / Clarett — Designed by Diego Fantoma
+Exec=dgfscarlett
+Icon=dgfscarlett
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=focusrite;scarlett;clarett;mixer;alsa;routing;patchbay;midi;

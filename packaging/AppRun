@@ -1,0 +1,15 @@
+#!/bin/sh
+# Avvio di DGFScarlett dall'AppImage — Designed by Diego Fantoma.
+# amixer e aseqdump (alsa-utils) sono quelli del sistema: servono comunque per parlare con la scheda.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+export DGFSCARLETT_APPIMAGE_DIR="$HERE"
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+unset PYTHONHOME PYTHONPATH
+
+# libxcb-cursor (serve a Qt su X11): quella inclusa solo se il sistema non la ha
+LDP="$HERE/usr/lib"
+/sbin/ldconfig -p 2>/dev/null | grep -q libxcb-cursor.so.0 || LDP="$LDP:$HERE/usr/lib/fallback/xcb"
+export LD_LIBRARY_PATH="$LDP${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+exec "$HERE/usr/python/bin/python3" -I "$HERE/usr/app/dgfscarlett.py" "$@"

@@ -18,6 +18,7 @@ Uso:
   dgfscarlett.py load FILE.json        ripristina un preset
   dgfscarlett.py midi-ports            porte MIDI in ingresso disponibili
   dgfscarlett.py meters                livelli letti dalla scheda, per verificare i vumeter
+  dgfscarlett.py --self-test           verifica che il programma (o l'AppImage) funzioni, anche senza scheda
 Opzione: --card ID   (id ALSA della scheda, es. USB; senza: la prima Focusrite trovata)
 """
 import argparse
@@ -34,7 +35,7 @@ import time
 
 APP = "DGFScarlett"
 AUTHOR = "Designed by Diego Fantoma"
-VERSION = "2.0"
+VERSION = "2.0.0"
 CONFIG = os.path.expanduser("~/.config/dgfscarlett/config.json")
 
 
@@ -2644,7 +2645,54 @@ def ensure_pyside6():
     sys.exit(3)
 
 
+def self_test():
+    """Verifica le parti del programma senza bisogno della scheda (usato da GitHub Actions e dall'AppImage)."""
+    results = []
+
+    def line(state, what, info=""):
+        results.append(state)
+        mark = {"ok": "\u2714", "warn": "!", "fail": "\u2718"}[state]
+        print(f" {mark} {what}" + (f"  — {info}" if info else ""))
+    line("ok", f"{APP} {VERSION}", f"Python {sys.version.split()[0]}")
+    sample = ("numid=1,iface=MIXER,name='Mix A Input 01 Playback Volume'\n"
+              "  ; type=INTEGER,access=rw------,values=1,min=0,max=172,step=0\n  : values=160\n"
+              "  | dBscale-min=-80.00dB,step=0.50dB,mute=0\n"
+              "numid=2,iface=PCM,name='Level Meter'\n  ; type=INTEGER,access=r--v----,values=2,min=0,max=4095,step=0\n"
+              "  : values=4095,0\n"
+              "numid=3,iface=PCM,name='Playback Channel Map'\n  ; type=INTEGER,access=r-------,values=1,min=0,max=36\n"
+              "  : values=0\n")
+    cs = {c.name: c for c in parse_contents(sample)}
+    good = (set(cs) == {"Mix A Input 01 Playback Volume", "Level Meter"}
+            and cs["Mix A Input 01 Playback Volume"].text() == "+0.0 dB" and cs["Level Meter"].count == 2)
+    c = cs.get("Mix A Input 01 Playback Volume")
+    good = good and all(fader_raw(c, fader_pos(c, r)) == r for r in range(c.min, c.max + 1))
+    line("ok" if good else "fail", "lettura dei controlli ALSA e curva dei fader")
+    try:
+        import PySide6
+        from PySide6.QtGui import QColor, QPainter, QPixmap
+        from PySide6.QtWidgets import QApplication
+        protected = protect_none()
+        app = QApplication.instance() or QApplication([APP])
+        pm = QPixmap(32, 32)
+        p = QPainter(pm)
+        for _ in range(30000):                     # senza protezione, PySide6 6.12 su Python 3.10 cadrebbe qui
+            p.setPen(QColor(1, 2, 3))
+        p.end()
+        line("ok", "PySide6 e disegno", f"PySide6 {PySide6.__version__}, piattaforma {app.platformName()}"
+             + (", protezione None attiva" if protected else ""))
+    except Exception as e:                          # noqa: BLE001 (qualsiasi errore qui è un fallimento)
+        line("fail", "PySide6 e disegno", str(e))
+    for tool in ("amixer", "aseqdump"):
+        w = shutil.which(tool)
+        line("ok" if w else "warn", tool, w or "manca: sudo apt install alsa-utils (serve sul computer con la scheda)")
+    failed = results.count("fail")
+    print("Self-test " + ("riuscito" if not failed else f"FALLITO ({failed})"))
+    return 1 if failed else 0
+
+
 def main():
+    if "--self-test" in sys.argv[1:]:
+        return self_test()
     ap = argparse.ArgumentParser(description=f"{APP}: pannello di controllo per Focusrite Scarlett/Clarett (Linux) · {AUTHOR}")
     ap.add_argument("--card", help="id ALSA della scheda (es. USB); predefinita: la prima Focusrite")
     ap.add_argument("cmd", nargs="?", choices=["list", "get", "set", "save", "load", "midi-ports", "meters"],

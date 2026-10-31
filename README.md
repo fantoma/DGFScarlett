@@ -43,10 +43,22 @@ L'ingresso MIDI usa il sequencer ALSA tramite `aseqdump` (alsa-utils), in un pro
 |---|---|---|
 | ![Ingressi](docs/ingressi.png) | ![Mixer](docs/mixer-learn.png) | ![Matrice](docs/matrice-mix.png) |
 
-## Installazione
+## Scaricare
+
+Dalla pagina [Releases](https://github.com/fantoma/DGFScarlett/releases) scarica
+`DGFScarlett-<versione>-x86_64.AppImage`: un solo file, con dentro Python e Qt.
 
 ```bash
-git clone https://github.com/<utente>/DGFScarlett.git
+chmod +x DGFScarlett-*-x86_64.AppImage
+./DGFScarlett-*-x86_64.AppImage
+```
+
+Serve solo `alsa-utils` (`sudo apt install alsa-utils`), presente quasi ovunque.
+
+## Installazione dai sorgenti
+
+```bash
+git clone https://github.com/fantoma/DGFScarlett.git
 cd DGFScarlett
 ./install.sh
 ```
@@ -74,13 +86,19 @@ opzione:  --card ID                id ALSA della scheda (predefinita: la prima F
 
 I comandi da terminale funzionano anche senza PySide6.
 
-## Sviluppo
+## Sviluppo e pubblicazione
+
+- `./crea_repo_github.sh`: crea il repository su GitHub (una volta sola).
+- `./release.sh`: pubblica una nuova versione. GitHub Actions prova il programma e allega l'AppImage alla Release.
+- Tutti i dettagli sono in [GITHUB.md](GITHUB.md).
+
 
 Senza la scheda si può usare il simulatore di una 18i20 2ª gen.:
 
 ```bash
 DGFSCARLETT_AMIXER=tests/fake_amixer.py ./dgfscarlett.py --card USB
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests          # anche la finestra, se c'è PySide6
+./dgfscarlett.py --self-test
 ```
 
 ## Licenza
