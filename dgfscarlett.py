@@ -17,6 +17,7 @@ Uso:
   dgfscarlett.py save FILE.json        salva lo stato della scheda (preset)
   dgfscarlett.py load FILE.json        ripristina un preset
   dgfscarlett.py midi-ports            porte MIDI in ingresso disponibili
+  dgfscarlett.py meters                livelli letti dalla scheda, per verificare i vumeter
 Opzione: --card ID   (id ALSA della scheda, es. USB; senza: la prima Focusrite trovata)
 """
 import argparse
@@ -271,18 +272,47 @@ def is_route(ctl):
 METER_ORDER = (r"^Analogue Output", r"^S/PDIF Output", r"^ADAT Output", r"^Mixer Input", r"^PCM \d+ Capture")
 
 
-def meter_dests(route_names, count):
-    """Nomi delle destinazioni nell'ordine dei valori di «Level Meter», o None se i conti non tornano."""
+def kernel_version():
+    m = re.match(r"(\d+)\.(\d+)", os.environ.get("DGFSCARLETT_KERNEL") or os.uname().release)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def meter_dests(route_names, count, old_first=False):
+    """Nomi delle destinazioni nell'ordine dei valori di «Level Meter», o None se i conti non tornano.
+    Kernel 6.7+: per tipo di porta (uscite analogiche, S/PDIF, ADAT, ingressi del mixer, PCM).
+    Kernel precedenti: i valori arrivano nell'ordine interno della scheda (per le Gen 2/3: prima i PCM verso
+    il computer, poi uscite analogiche, S/PDIF, ADAT, ingressi del mixer)."""
     def num(n):
         m = re.search(r"(\d+)", n)
         return int(m.group(1)) if m else 0
     g = [sorted((n for n in route_names if re.match(p, n)), key=num) for p in METER_ORDER]
     dsp = sorted((n for n in route_names if re.match(r"^DSP Input", n)), key=num)
     base = [n for grp in g for n in grp]
-    for cand in ([base] + ([g[0] + g[1] + g[2] + g[3] + dsp + g[4], base + dsp, dsp + base] if dsp else [])):
+    new = [base] + ([g[0] + g[1] + g[2] + g[3] + dsp + g[4], base + dsp, dsp + base] if dsp else [])
+    others = g[0] + g[1] + g[2] + g[3]
+    k = count - len(others)
+    old = [g[4][:k] + others] if 0 < k <= len(g[4]) else []
+    for cand in (old + new if old_first else new + old):
         if len(cand) == count:
             return cand
     return None
+
+
+def meter_setup(ctls, route_names):
+    """(controllo, {destinazione: indice}, nota). Il controllo è None se i vumeter non si possono usare."""
+    ctl = ctls.get("Level Meter")
+    kern = os.environ.get("DGFSCARLETT_KERNEL") or os.uname().release
+    if ctl is None:
+        return None, {}, (f"il driver non espone il controllo «Level Meter» (kernel {kern}): "
+                          "serve il driver scarlett2 con un kernel recente")
+    old = kernel_version() < (6, 7)
+    order = meter_dests(route_names, ctl.count, old_first=old)
+    if not order:
+        return None, {}, (f"«Level Meter» ha {ctl.count} valori ma il routing ha {len(route_names)} destinazioni: "
+                          f"non so a cosa corrispondano (kernel {kern}). Manda l'uscita di «dgfscarlett meters»")
+    note = (f"Kernel {kern}: ordine dei livelli ricostruito per i kernel precedenti al 6.7; se un vumeter non "
+            "corrisponde, controlla con «dgfscarlett meters»." if old else "")
+    return ctl, {n: i for i, n in enumerate(order)}, note
 
 
 def pretty(target):
@@ -529,6 +559,31 @@ def cli(args):
     cid, cname = find_card(args.card)
     card = Card(cid)
     card.read()
+    if args.cmd == "meters":
+        routes = [n for n in sorted(card.ctls) if is_route(card.ctls[n])]
+        raw = card.ctls.get("Level Meter")
+        print(f"Kernel {os.environ.get('DGFSCARLETT_KERNEL') or os.uname().release} · scheda {cname} ({cid})")
+        print("Level Meter: " + (f"numid={raw.numid}, {raw.count} valori, max {raw.max}" if raw else "ASSENTE"))
+        print(f"Destinazioni del routing: {len(routes)}")
+        ctl, idx, note = meter_setup(card.ctls, routes)
+        if note:
+            print("Nota:", note)
+        if ctl is None:
+            return 1
+        peak = [0] * ctl.count
+        for _ in range(20):                                  # un secondo di letture: si tiene il massimo
+            vals = parse_contents(_amixer(["-c", card.id, "cget", f"numid={ctl.numid}"]))[0].values
+            peak = [max(a, b) for a, b in zip(peak, vals + [0] * (len(peak) - len(vals)))]
+            time.sleep(0.05)
+        name_of = {i: n for n, i in idx.items()}
+        print(f"\n{'#':>3}  {'destinazione':<14} {'sorgente':<14} livello")
+        for i, v in enumerate(peak):
+            n = name_of.get(i, "?")
+            src = card.ctls[n].text() if n in card.ctls else ""
+            db = f"{20 * math.log10(v / max(1, ctl.max)):6.1f} dBFS" if v > 0 else "     -∞"
+            bar = "#" * int(max(0, 60 + (20 * math.log10(v / max(1, ctl.max)) if v > 0 else -60)) / 3)
+            print(f"{i:>3}  {dest_label(n):<14} {src:<14} {db}  {bar}")
+        return 0
     if args.cmd == "list":
         f = (args.args[0] if args.args else "").lower()
         for n, c in sorted(card.ctls.items()):
@@ -751,6 +806,7 @@ def gui(args):
             self.shown = self.peak = self.LO
             self.peak_t, self.clip, self.active, self.known = 0.0, False, False, False
             self.mapper, self.inset_fn = None, None      # per allinearsi alla scala di un fader
+            self.unavailable = None                       # motivo, se i livelli non si possono leggere
             if vertical:
                 self.setFixedWidth(7)
             else:
@@ -795,8 +851,9 @@ def gui(args):
             p.setFont(f)
             if not self.active:
                 p.setPen(QColor(90, 90, 100))
-                if TW and self.known:
-                    p.drawText(QRect(4, 0, W - 8, H), Qt.AlignLeft | Qt.AlignVCenter, "non instradato")
+                if TW and (self.known or self.unavailable):
+                    p.drawText(QRect(4, 0, W - 8, H), Qt.AlignLeft | Qt.AlignVCenter,
+                               "non disponibile" if self.unavailable else "non instradato")
                 return
             ins = int(self.inset_fn()) if self.vertical and self.inset_fn else 1
             L = (H - 2 * ins) if self.vertical else W - 2
@@ -833,6 +890,21 @@ def gui(args):
                 p.setPen(QColor(255, 90, 90) if self.clip else QColor(220, 220, 228))
                 txt = "-∞" if self.peak <= self.LO else f"{self.peak:.0f} dB"
                 p.drawText(QRect(W, 0, TW, H), Qt.AlignRight | Qt.AlignVCenter, txt)
+
+    def draw_level(p, r, db, vertical):
+        """Barretta di livello -60…0 dBFS in un rettangolo (per le testate delle matrici)."""
+        p.fillRect(r, QColor(14, 14, 17))
+        f = max(0.0, min(1.0, (db + 60) / 60))
+        L = r.height() if vertical else r.width()
+        for a, b, col in ((0.0, 42 / 60, QColor(46, 160, 80)), (42 / 60, 54 / 60, QColor(214, 180, 40)),
+                          (54 / 60, 1.0, QColor(220, 50, 50))):
+            a, b = min(a, f), min(b, f)
+            if b <= a:
+                continue
+            if vertical:
+                p.fillRect(r.left(), int(r.bottom() + 1 - b * L), r.width(), max(1, int((b - a) * L)), col)
+            else:
+                p.fillRect(int(r.left() + a * L), r.top(), max(1, int((b - a) * L)), r.height(), col)
 
     class Scale(QWidget):
         """Scala in dB accanto al fader."""
@@ -1066,6 +1138,12 @@ def gui(args):
         def col_group_text(self, gid, title):
             return title
 
+        def row_level(self, key):
+            return None
+
+        def col_level(self, key):
+            return None
+
         def paint_cell(self, p, r, rkey, ck, ckey, here):
             pass
 
@@ -1149,6 +1227,9 @@ def gui(args):
                     p.setPen(GREY)
                     p.drawText(QRect(x, sy, 12, self.rh), Qt.AlignCenter, "▾" if rkey in self.expanded else "▸")
                     x += 16
+                lv = self.row_level(rkey)
+                if lv is not None:
+                    draw_level(p, QRect(x, sy + self.rh - 5, HW - x - 8, 3), lv, False)
                 main, sub = self.row_label(rkey)
                 rr = QRect(x, sy, HW - x - 8, self.rh)
                 p.setPen(QColor(225, 225, 230))
@@ -1176,6 +1257,10 @@ def gui(args):
                     p.fillRect(r, QColor(52, 53, 63))
                 p.setPen(QColor(215, 215, 222) if ck == "c" else GREY)
                 txt = self.col_text(ckey) if ck == "c" else self.col_groups[gi][1]
+                lv = self.col_level(ckey) if ck == "c" else None
+                if lv is not None:
+                    draw_level(p, QRect(r.right() - 5, r.top() + 4, 4, r.height() - 8), lv, True)
+                    r = r.adjusted(0, 0, -6, 0)
                 if self.rotate_cols or ck == "g":
                     p.save()
                     p.translate(r.left(), r.bottom())
@@ -1417,6 +1502,12 @@ def gui(args):
             d = self.win.mix_dests(x)
             return f"Mix {x}" + (f"  → {', '.join(d)}" if d else "")
 
+        def row_level(self, i):
+            return self.win.mlevel.get(("in", i))
+
+        def col_level(self, x):
+            return self.win.mlevel.get(("mix", x))
+
         def ctl(self, i, x):
             n = self.names.get((i, x))
             return n, (card.ctls.get(n) if n else None)
@@ -1528,7 +1619,7 @@ def gui(args):
             self.matrices, self.recent, self.softmute = [], {}, {}
             self.route_names, self.out_labels = [], {}
             self.last_err = 0
-            self.meters, self.meter_on = [], False
+            self.meters, self.meter_on, self.mlevel = [], False, {}
             self.learn_mode, self.learn_target = False, None
             mcfg = self.cfg.get("midi", {})
             self.midimap = {}
@@ -1758,9 +1849,12 @@ def gui(args):
 
         # ------------------------------------------------------------ vumeter
         def add_meter(self, m, index_fn):
-            if self.meter_ctl is None:
-                return
             m.show()
+            if self.meter_ctl is None:
+                m.unavailable = self.meter_note
+                m.setToolTip("Vumeter non disponibile: " + self.meter_note)
+                m.update()
+                return
             self.meters.append((m, index_fn))
 
         def src_meter_index(self, src):
@@ -1777,7 +1871,7 @@ def gui(args):
 
         def _meter_gate(self):
             self.meter_on = (self.isVisible() and not self.isMinimized()
-                             and self.tabs.tabText(self.tabs.currentIndex()) in ("Ingressi", "Mixer", "Uscite"))
+                             and self.tabs.tabText(self.tabs.currentIndex()) in ("Ingressi", "Mixer", "Matrice mix", "Uscite"))
 
         def _meter_loop(self):
             args = ["-c", card.id, "cget", f"numid={self.meter_ctl.numid}"]
@@ -1795,6 +1889,20 @@ def gui(args):
 
         def _meters(self, vals):
             full = max(1, self.meter_ctl.max)
+
+            def db_of(i):
+                if i is None or i >= len(vals):
+                    return None
+                return 20 * math.log10(vals[i] / full) if vals[i] > 0 else -200.0
+            gm = getattr(self, "gain_matrix", None)
+            if gm is not None and gm.isVisible():                  # matrice: ingressi del mixer e mix
+                for key, i in ([(("in", k), self.meter_idx.get(f"Mixer Input {k:02d} Capture Enum"))
+                                for k in self.mix_inputs] +
+                               [(("mix", x), self.src_meter_index(f"Mix {x}")) for x in self.mixes]):
+                    db = db_of(i)
+                    prev = self.mlevel.get(key)
+                    self.mlevel[key] = None if db is None else max(db, (prev if prev is not None else -200) - 1.3)
+                gm.viewport().update()
             for m, fn in self.meters:
                 if not m.isVisible():
                     continue
@@ -1870,19 +1978,9 @@ def gui(args):
             self.route_names = [n for n in sorted(ctls) if is_route(ctls[n])]
 
             # --- ingressi: una riga per ingresso, con vumeter e controlli
-            self.meter_ctl = ctls.get("Level Meter")
-            self.meter_idx, self.meter_note = {}, ""
-            if self.meter_ctl is not None:
-                order = meter_dests(self.route_names, self.meter_ctl.count)
-                if order:
-                    self.meter_idx = {n: i for i, n in enumerate(order)}
-                    rel = re.match(r"(\d+)\.(\d+)", os.uname().release)
-                    if rel and (int(rel.group(1)), int(rel.group(2))) < (6, 7):
-                        self.meter_note = ("Kernel precedente al 6.7: il driver può restituire i livelli in un ordine "
-                                           "diverso, i vumeter potrebbero non corrispondere agli ingressi.")
-                else:
-                    self.meter_ctl = None
-                    self.meter_note = "«Level Meter» ha un numero di valori inatteso: vumeter disattivati."
+            self.meter_ctl, self.meter_idx, self.meter_note = meter_setup(ctls, self.route_names)
+            print(f"{APP} vumeter: " + ("attivi" if self.meter_ctl is not None else "NON disponibili") +
+                  (f" — {self.meter_note}" if self.meter_note else ""), file=sys.stderr)
             used.add("Level Meter")
             ins = [n for n in ctls if (re.match(r"^Line In \d", n) or "Phantom" in n or re.match(r"^Input \d", n))
                    and n not in self.route_names]
@@ -1892,7 +1990,7 @@ def gui(args):
                     m = re.match(r"^(Analogue|S/PDIF|ADAT) (\d+)$", it)
                     if m:
                         srcs.setdefault(m.group(1), set()).add(int(m.group(2)))
-            if ins or self.meter_ctl is not None:
+            if True:
                 w = QWidget()
                 v = QVBoxLayout(w)
                 g = QGridLayout()
@@ -1900,7 +1998,7 @@ def gui(args):
                 r = 0
                 for title, pre in (("Ingressi analogici", "Analogue"), ("S/PDIF", "S/PDIF"), ("ADAT", "ADAT")):
                     nums = sorted(srcs.get(pre, ()))
-                    if not nums or (pre != "Analogue" and self.meter_ctl is None):
+                    if not nums:
                         continue
                     lab = QLabel(f"<b>{title}</b>")
                     lab.setContentsMargins(0, 8 if r else 0, 0, 2)
@@ -1909,10 +2007,9 @@ def gui(args):
                     for k in nums:
                         src = f"{pre} {k}"
                         g.addWidget(QLabel(f"In {k}" if pre == "Analogue" else src), r, 0)
-                        if self.meter_ctl is not None:
-                            m = LevelMeter(text=True)
-                            self.add_meter(m, lambda src=src: self.src_meter_index(src))
-                            g.addWidget(m, r, 1)
+                        m = LevelMeter(text=True)
+                        self.add_meter(m, lambda src=src: self.src_meter_index(src))
+                        g.addWidget(m, r, 1)
                         h = QHBoxLayout()
                         h.setSpacing(6)
                         if pre == "Analogue":
@@ -1966,8 +2063,10 @@ def gui(args):
                                           "legge il PCM (o l'ingresso del mixer) a cui è collegato. Un ingresso non "
                                           "collegato a nulla risulta «non instradato». " + self.meter_note))
                 else:
-                    v.addWidget(self.hint(self.meter_note or "Vumeter non disponibili: il driver non espone «Level "
-                                          "Meter» (serve un kernel recente con il driver scarlett2)."))
+                    warn = QLabel("⚠ Vumeter non disponibili: " + self.meter_note)
+                    warn.setWordWrap(True)
+                    warn.setStyleSheet("color:#e6a23c;")
+                    v.addWidget(warn)
                 self.tabs.addTab(self.scroll(w), "Ingressi")
 
             # --- mixer (fader) e matrice dei mix
@@ -1997,6 +2096,7 @@ def gui(args):
                 v = QVBoxLayout(w)
                 hb = QHBoxLayout()
                 gm = GainMatrix(self, self.mix_inputs, self.mixes, names)
+                self.gain_matrix = gm
                 for txt, fn in (("Espandi tutte le righe", lambda: gm.set_all_expanded(True)),
                                 ("Comprimi tutte", lambda: gm.set_all_expanded(False))):
                     b = QPushButton(txt)
@@ -2545,7 +2645,7 @@ def ensure_pyside6():
 def main():
     ap = argparse.ArgumentParser(description=f"{APP}: pannello di controllo per Focusrite Scarlett/Clarett (Linux) · {AUTHOR}")
     ap.add_argument("--card", help="id ALSA della scheda (es. USB); predefinita: la prima Focusrite")
-    ap.add_argument("cmd", nargs="?", choices=["list", "get", "set", "save", "load", "midi-ports"],
+    ap.add_argument("cmd", nargs="?", choices=["list", "get", "set", "save", "load", "midi-ports", "meters"],
                     help="comando (senza: finestra)")
     ap.add_argument("args", nargs="*")
     ap.add_argument("--version", action="version", version=f"{APP} {VERSION} — {AUTHOR}")

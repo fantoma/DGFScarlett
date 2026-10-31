@@ -42,7 +42,7 @@ def controls():
         add(f"S/PDIF Output {i} Playback Enum", "enum", items=SOURCES, value=0)
     for i in range(1, 9):
         add(f"ADAT Output {i} Playback Enum", "enum", items=SOURCES, value=0)
-    for i in range(1, 21):
+    for i in range(1, 19):
         v = f"Analogue {i}" if i <= 8 else "Off"
         add(f"PCM {i:02d} Capture Enum", "enum", items=SOURCES, value=SOURCES.index(v))
     for i in range(1, 19):
@@ -53,7 +53,8 @@ def controls():
             add(f"Mix {chr(65 + x)} Input {i:02d} Playback Volume", "int", min=0, max=172,
                 value=160 if i == x + 1 else 0, db=(-80, 0.5))
     add("Firmware Version", "int", min=0, max=99999, value=1083, ro=True)
-    add("Level Meter", "int", min=0, max=4095, value=0, ro=True, count=58)
+    if not os.environ.get("FAKE_NO_METER"):
+        add("Level Meter", "int", min=0, max=4095, value=0, ro=True)
     return c
 
 
@@ -61,7 +62,9 @@ DEST_ORDER = ([f"Analogue Output {i:02d} Playback Enum" for i in range(1, 11)]
               + [f"S/PDIF Output {i} Playback Enum" for i in range(1, 3)]
               + [f"ADAT Output {i} Playback Enum" for i in range(1, 9)]
               + [f"Mixer Input {i:02d} Capture Enum" for i in range(1, 19)]
-              + [f"PCM {i:02d} Capture Enum" for i in range(1, 21)])
+              + [f"PCM {i:02d} Capture Enum" for i in range(1, 19)])
+if os.environ.get("FAKE_OLD_KERNEL"):          # kernel < 6.7: ordine interno della scheda, PCM per primi
+    DEST_ORDER = DEST_ORDER[38:] + DEST_ORDER[:38]
 
 
 def level(src, t):
@@ -95,7 +98,8 @@ def load():
             c["ro"] = modes.get(c["name"][5:7]) == 1
     by = {c["name"]: c for c in cs}
     t = time.time()
-    by["Level Meter"]["values"] = [level(by[d]["items"][by[d]["value"]], t) for d in DEST_ORDER]
+    if "Level Meter" in by:
+        by["Level Meter"]["values"] = [level(by[d]["items"][by[d]["value"]], t) for d in DEST_ORDER]
     return cs
 
 

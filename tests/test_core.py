@@ -53,11 +53,22 @@ class Core(unittest.TestCase):
 
     def test_routes_and_names(self):
         routes = [n for n, c in self.card.ctls.items() if d.is_route(c)]
-        self.assertEqual(len(routes), 10 + 2 + 8 + 20 + 18)
+        self.assertEqual(len(routes), 10 + 2 + 8 + 18 + 18)
         self.assertFalse(d.is_route(self.card.ctls["Clock Source Clock Source"]))
         self.assertEqual(d.dest_label("Analogue Output 03 Playback Enum"), "Out 3")
         self.assertEqual(d.pretty("mute:Mix B Input 03 Playback Volume"), "Mix B · In 3 · mute")
         self.assertEqual(d.pretty("Line 07 (Headphones 1 L) Playback Volume"), "Out 7 (Headphones 1 L)")
+
+
+    def test_meter_order(self):
+        routes = [n for n, c in self.card.ctls.items() if d.is_route(c)]
+        new = d.meter_dests(routes, 56)
+        old = d.meter_dests(routes, 56, old_first=True)
+        self.assertEqual(new[0], "Analogue Output 01 Playback Enum")
+        self.assertEqual(new[38], "PCM 01 Capture Enum")
+        self.assertEqual(old[0], "PCM 01 Capture Enum")
+        self.assertEqual(old[18], "Analogue Output 01 Playback Enum")
+        self.assertIsNone(d.meter_dests(routes, 99))
 
 
 class Midi(unittest.TestCase):
